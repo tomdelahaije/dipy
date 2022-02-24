@@ -303,6 +303,33 @@ if interactive:
 
    CSD Peaks and ODFs.
 
+When specifying the model we can opt for the use of sum-of-squares constraints
+for CSD, which ensures strict and global positivity [DelaHaije2020]_. This is
+done by setting the parameter `positivity_constraint=True`, and will result in a
+more accurate estimation of the ODFs at the cost of additional computation time.
+"""
+
+csd_model_plus = ConstrainedSphericalDeconvModel(
+    gtab, response, positivity_constraint=True, cvxpy_solver='MOSEK')
+csd_fit_plus = csd_model_plus.fit(data_small)
+
+fodf_spheres_plus = actor.odf_slicer(csd_odf_plus, sphere=default_sphere,
+                                     scale=0.9, norm=False, colormap='plasma')
+
+scene.clear()
+scene.add(fodf_spheres_plus)
+
+print('Saving illustration as csd+_odfs.png')
+window.record(scene, out_path='csd+_odfs.png', size=(600, 600))
+if interactive:
+    window.show(scene)
+
+"""
+.. figure:: csd+_odfs.png
+   :align: center
+
+   CSD ODFs computed with strict positivity constraints.
+
 References
 ----------
 
@@ -314,6 +341,10 @@ References
 .. [Tax2014] C.M.W. Tax, B. Jeurissen, S.B. Vos, M.A. Viergever, A. Leemans,
    "Recursive calibration of the fiber response function for spherical
    deconvolution of diffusion MRI data", Neuroimage, vol. 86, pp. 67-80, 2014.
+
+.. [DelaHaije2020] T.C.J. Dela Haije, E. Özarslan, and A. Feragen. "Enforcing
+   necessary non-negativity constraints for common diffusion MRI models
+   using sum of squares programming." NeuroImage 209 (2020): 116405.
 
 .. include:: ../links_names.inc
 
