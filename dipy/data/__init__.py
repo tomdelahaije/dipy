@@ -315,9 +315,9 @@ def matlab_life_results():
     return matlab_rmse, matlab_weights
 
 
-def csdeconv_sdp_constraints(sh_order):
-    """Import semidefinite programming constraint matrices for CSD,
-    generated as described in [1]_.
+def real_sh_descoteaux_sdp_constraints(sh_order):
+    """Import semidefinite programming constraint matrices for real spherical
+    harmonic expansions, generated as described in [1]_.
 
     Parameters
     ----------
@@ -337,7 +337,7 @@ def csdeconv_sdp_constraints(sh_order):
 
     """
 
-    mf = 'csdeconv_constraint_' + str(sh_order) + '.csv'
+    mf = 'real_sh_descoteaux_constraint_' + str(sh_order) + '.csv'
     coo = np.loadtxt(pjoin(DATA_DIR, mf), delimiter=",")
     pos = coo[:, :3].astype(int)
     val = coo[:, 3]
