@@ -306,8 +306,7 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
         self.positivity_constraint = positivity_constraint
         if self.positivity_constraint:
             if not have_cvxpy:
-                raise ValueError(
-                    'CVXPY package needed to enforce constraints')
+                raise ValueError('CVXPY package needed to enforce constraints.')
             if cvxpy_solver is not None:
                 if cvxpy_solver not in cvxpy.installed_solvers():
                     msg = "Input `cvxpy_solver` was set to %s." % cvxpy_solver
