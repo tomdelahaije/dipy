@@ -220,7 +220,7 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
             A boolean indicating whether the strict non-negativitiy constraints
             described in [5]_ should be applied. If positivity_constraint is
             set to True then all other optional parameters except for sh_order
-            are ignored. Default: False
+            and cvxpy_solver are ignored. Default: False
         cvxpy_solver : str (optional)
             cvxpy solver name. Optionally optimize the positivity constraint
             with a particular cvxpy solver. See http://www.cvxpy.org/ for
