@@ -99,6 +99,25 @@ def test_forecast_csd():
     assert_equal(value, 1)
 
 
+@needs_cvxpy
+def test_forecast_csdp():
+    sphere = get_sphere('repulsion100')
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message=descoteaux07_legacy_msg,
+            category=PendingDeprecationWarning)
+        fm = ForecastModel(data.gtab, dec_alg='CSDP')
+    f_fit = fm.fit(data.S)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message=descoteaux07_legacy_msg,
+            category=PendingDeprecationWarning)
+        fodf_csd = f_fit.odf(sphere, clip_negative=False)
+
+    value = fodf_csd[fodf_csd < 0].sum()
+    assert_equal(value == 0.0, True)
+
+
 def test_forecast_odf():
     # check FORECAST fODF at different SH order
     with warnings.catch_warnings():

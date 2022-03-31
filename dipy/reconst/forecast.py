@@ -6,11 +6,11 @@ import numpy as np
 
 from dipy.reconst.cache import Cache
 from dipy.reconst.multi_voxel import multi_voxel_fit
-from dipy.reconst.csdeconv import csdeconv
+from dipy.reconst.csdeconv import csdeconv, csdeconv_plus
 from dipy.reconst.shm import real_sh_descoteaux_from_index
 from scipy.special import gamma, hyp1f1
 from dipy.core.geometry import cart2sphere
-from dipy.data import default_sphere
+from dipy.data import default_sphere, real_sh_descoteaux_sdp_constraints
 from dipy.reconst.odf import OdfModel, OdfFit
 from scipy.optimize import leastsq
 from dipy.utils.optpkg import optional_package
@@ -85,9 +85,10 @@ class ForecastModel(OdfModel, Cache):
         lambda_lb: float,
             Laplace-Beltrami regularization weight.
         dec_alg : str,
-            Spherical deconvolution algorithm. The possible values are Weighted Least Squares ('WLS'),
-            Positivity Constraints using CVXPY ('POS') and the Constraint
-            Spherical Deconvolution algorithm ('CSD'). Default is 'CSD'.
+            Spherical deconvolution algorithm. The possible values are weighted
+            least squares ('WLS'), positivity constrainted least squares ('POS')
+            and various constrained spherical deconvolution algorithms ('CSD'
+            and 'CSDP'). Default is 'CSD'.
         sphere : array, shape (N,3),
             sphere points where to enforce positivity when 'POS' or 'CSD'
             dec_alg are selected.
@@ -180,6 +181,7 @@ class ForecastModel(OdfModel, Cache):
         self.wls = True
         self.csd = False
         self.pos = False
+        self.csdp = False
 
         if dec_alg.upper() == 'POS':
             if have_cvxpy:
@@ -188,9 +190,19 @@ class ForecastModel(OdfModel, Cache):
             else:
                 msg = 'cvxpy is needed to inforce positivity constraints.'
                 raise ValueError(msg)
-
-        if dec_alg.upper() == 'CSD':
+        elif dec_alg.upper() == 'CSD':
+            self.wls = False
             self.csd = True
+        elif dec_alg.upper() == 'CSDP':
+            if have_cvxpy:
+                self.wls = False
+                self.csdp = True
+                self.sdp_constraints = real_sh_descoteaux_sdp_constraints(
+                    self.sh_order)
+                self.cvxpy_solver = None
+            else:
+                msg = 'cvxpy is needed to inforce positivity constraints.'
+                raise ValueError(msg)
 
         self.lb_matrix = lb_forecast(self.sh_order)
         self.lambda_lb = lambda_lb
@@ -258,6 +270,11 @@ class ForecastModel(OdfModel, Cache):
             if self.csd:
                 coef, _ = csdeconv(data_single_b0, M, self.fod, tau=0.1,
                                    convergence=50)
+                coef = coef / coef[0] * c0
+
+            if self.csdp:
+                coef = csdeconv_plus(data_single_b0, M, self.sdp_constraints,
+                                        self.cvxpy_solver)
                 coef = coef / coef[0] * c0
 
             if self.pos:
