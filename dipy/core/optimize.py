@@ -5,6 +5,7 @@ import numpy as np
 import scipy.sparse as sps
 import scipy.optimize as opt
 from scipy.optimize import minimize
+from packaging.version import Version
 from dipy.utils.optpkg import optional_package
 
 cvxpy, have_cvxpy, _ = optional_package("cvxpy")
@@ -346,8 +347,8 @@ class NonNegativeLeastSquares(SKLearnLinearSolver):
         self.coef_ = coef
         return self
 
-
-def rlslmi_problem(X, u, L, A):
+#def problem_rls_lmi(A, X=None, y=None, u=0., L=None):
+def problem_rls_lmi(X, u, L, A):
     r""" Regularized least squares with linear matrix inequality constraints
 
     Generate a CVXPY representation of a regularized least squares optimization
@@ -361,21 +362,21 @@ def rlslmi_problem(X, u, L, A):
         Regularization parameter $u$.
     L : array (l, n)
         Regularization matrix $L$.
-    A : array (n + k + 1, p, p)
+    A : array (t = m + k + 1, p, p)
         Constraint matrices $A$.
 
     Returns
     -------
     problem : Problem
-         CVXPY problem with the measured signal $y$ (with length n) as a
-         parameter, that can be solved to produce the estimates of the problem
-         variables $h$ (with length m).
+        CVXPY problem instance with the measured signal $y$ (with length n) as a
+        parameter, that can be solved to produce the estimates of the problem
+        variables $h$ (with length m).
 
     Notes
     -----
     The basic problem is to minimize
 
-    $\|X h - y\|^2 + u \|L h\|^2$
+    $c=\|X h - y\|^2 + u \|L h\|^2$
 
     subject to the constraint that
 
@@ -395,43 +396,91 @@ def rlslmi_problem(X, u, L, A):
     """
 
     n, m = X.shape
-    k = A.shape[0] - m - 1
+    t = A.shape[0]
+    k = t - m - 1
 
     h = cvxpy.Variable(m)
-    s = cvxpy.Variable(k)
     y = cvxpy.Parameter(n)
 
     if Version(cvxpy.__version__) < Version('1.1'):
         if not u:
-            objective = cvxpy.sum_squares(X*h - y)
+            c = cvxpy.sum_squares(X*h - y)
         else:
-            objective = cvxpy.sum_squares(X*h - y) + u * cvxpy.quad_form(h, L)
+            c = cvxpy.sum_squares(X*h - y) + u * cvxpy.quad_form(h, L)
     else:
         if not u:
-            objective = cvxpy.sum_squares(X@h - y)
+            c = cvxpy.sum_squares(X@h - y)
         else:
-            objective = cvxpy.sum_squares(X@h - y) + u * cvxpy.quad_form(h, L)
+            c = cvxpy.sum_squares(X@h - y) + u * cvxpy.quad_form(h, L)
 
     M = A[0]
-    for i in range(m):
-        M += h[i] * A[i + 1]
-    for j in range(k):
-        M += s[j] * A[m + j + 1]
+    if k > 0:
+        for i in range(m):
+            M += h[i] * A[i + 1]
+        s = cvxpy.Variable(k)
+        for j in range(k):
+            M += s[j] * A[m + j + 1]
+    else:
+        for i in range(t):
+            M += h[i] * A[i + 1]
     constraints = [M >> 0]
 
-    return cvxpy.Problem(objective, constraints)
+    return cvxpy.Problem(cvxpy.Minimize(c), constraints)
 
-    # try:
-    #     prob.solve(solver=cvxpy_solver)
-    #     result = np.asarray(h.value).squeeze()
-    # except Exception:
-    #     msg = 'Constrained optimization failed, trying without constraints.'
-    #     warnings.warn(msg)
-    #     try:
-    #         #SMOOTH
-    #         fodf_sh = np.dot(la.pinv(X), y)  # least squares
-    #     except la.LinAlgError:
-    #         warnings.warn('Optimization failed.')
-    #         results = np.zeros(m)
-    #
-    # return result
+
+def problem_solve(problem, signal, solver=None):
+    r""" Solve CVXPY problem
+
+    Solve a CVXPY problem instance for a given signal, and return the optimum.
+
+    Parameters
+    ----------
+    problem : Problem
+        CVXPY problem instance with the measured signal $y$ (with length n) as a
+        parameter, that can be solved to produce the estimates of the problem
+        variables $h$ (with length m).
+    signal : array (n)
+        Measured signal $y$.
+    solver : string
+        CVXPY solver name. Default: None
+
+    Returns
+    -------
+    result : array (m)
+         Estimated optimum for problem variables $h$.
+
+    Notes
+    -----
+    If the solver fails for a constrained problem, a warning will be shown and
+    the unconstrained problem will be attempted instead. If the solver fails for
+    an unconstrained problem, a warning will be shown and a zero array will be
+    returned.
+    """
+
+    y = problem.parameters()[0]
+    h = problem.variables()[0]
+
+    y.value = signal
+
+    try:
+        problem.solve(solver=solver)
+        result = np.asarray(h.value).squeeze()
+    except Exception:
+        if problem.constraints:
+            msg = 'Constrained optimization failed, attempting unconstrained'
+            msg += ' optimization.'
+            warnings.warn(msg)
+            try:
+                unconstrained = cvxpy.Problem(problem.objective)
+                unconstrained.solve(solver=solver)
+                result = np.asarray(h.value).squeeze()
+            except Exception:
+                msg = 'Unconstrained optimization failed, returning zero array.'
+                warnings.warn(msg)
+                result = np.zeros(h.size)
+        else:
+            msg = 'Unconstrained optimization failed, returning zero array.'
+            warnings.warn(msg)
+            result = np.zeros(h.size)
+
+    return result

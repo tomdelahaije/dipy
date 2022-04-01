@@ -30,6 +30,8 @@ from dipy.core.geometry import vec2vec_rotmat
 from dipy.utils.deprecator import deprecate_with_version, deprecated_params
 from dipy.utils.optpkg import optional_package
 
+from dipy.core.optimize import problem_rls_lmi, problem_solve
+
 cvxpy, have_cvxpy, _ = optional_package("cvxpy")
 
 @deprecate_with_version("dipy.reconst.csdeconv.auto_response is deprecated, "
@@ -213,10 +215,10 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
             zero. However, to improve the stability of the algorithm, tau is
             set to tau*100 % of the mean fODF amplitude (here, 10% by default)
             (see [1]_). Default: 0.1
-        convergence : int
+        convergence : int (optional)
             Maximum number of iterations to allow the deconvolution to
             converge. Default: 50
-        positivity_constraint : bool
+        positivity_constraint : bool (optional)
             A boolean indicating whether the strict non-negativitiy constraints
             described in [5]_ should be applied. If positivity_constraint is
             set to True then all other optional parameters except for sh_order
@@ -313,14 +315,16 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
                     msg += " One of %s" % ', '.join(cvxpy.installed_solvers())
                     msg += " was expected."
                     raise ValueError(msg)
-            self.sdp_constraints = real_sh_descoteaux_sdp_constraints(sh_order)
+            self._sdp_constraints = real_sh_descoteaux_sdp_constraints(sh_order)
+            self.sdp_problem = problem_rls_lmi(self._X, 0., [],
+                                               self._sdp_constraints)
         self.cvxpy_solver = cvxpy_solver
 
     @multi_voxel_fit
     def fit(self, data):
         dwi_data = data[self._where_dwi]
         if self.positivity_constraint:
-            shm_coeff = csdeconv_plus(dwi_data, self._X, self.sdp_constraints,
+            shm_coeff = problem_solve(self.sdp_problem, dwi_data,
                                       self.cvxpy_solver)
         else:
             shm_coeff, _ = csdeconv(dwi_data, self._X, self.B_reg, self.tau,
@@ -736,82 +740,6 @@ def csdeconv(dwsignal, X, B_reg, tau=0.1, convergence=50, P=None):
 
     return fodf_sh, num_it
 
-def csdeconv_plus(dwsignal, X, sdp_constraints, cvxpy_solver):
-    r""" Strictly constrained spherical deconvolution (CSD+) [1]_
-
-    Deconvolves the axially symmetric single fiber response function `r_rh` in
-    rotational harmonics coefficients from the diffusion weighted signal in
-    `dwsignal`.
-
-    Parameters
-    ----------
-    dwsignal : array
-        Diffusion weighted signals to be deconvolved.
-    X : array
-        Prediction matrix which estimates diffusion weighted signals from FOD
-        coefficients.
-    sdp_constraints : array
-        Constraint matrices used to ensure estimated FOD coefficients
-        correspond to strictly non-negative functions.
-    cvxpy_solver : str
-        cvxpy solver name. Optionally optimize the positivity constraint
-        with a particular cvxpy solver. See http://www.cvxpy.org/ for
-        details.
-
-    Returns
-    -------
-    fodf_sh : ndarray (``(sh_order + 1)*(sh_order + 2)/2``,)
-         Spherical harmonics coefficients of the constrained-regularized fiber
-         ODF.
-
-    Notes
-    -----
-    The basic problem is the same as csdeconv [2]_, i.e., to minimise:
-
-    $F(f_n) = ||Xf_n - S||^2$
-
-    Where $X$ maps FOD SH coefficients $f_n$ to DW signals $S$. The difference
-    is that in this case non-negativity is not approximated through iterative
-    regularization, but strictly enforced using sum-of-squares optimization
-    [1]_.
-
-    References
-    ----------
-    .. [1] Dela Haije et al. "Enforcing necessary non-negativity constraints
-           for common diffusion MRI models using sum of squares programming".
-           NeuroImage 209, 2020, 116405.
-    .. [2] Tournier, J.D., et al. NeuroImage 2007. Robust determination of the
-           fibre orientation distribution in diffusion MRI: Non-negativity
-           constrained super-resolved spherical deconvolution.
-    """
-
-    c = cvxpy.Variable(X.shape[1])
-    design_matrix = cvxpy.Constant(X)
-    objective = cvxpy.Minimize(cvxpy.sum_squares(design_matrix@c - dwsignal))
-
-    m = X.shape[1]
-    n = sdp_constraints.shape[0] - m - 1
-    s = cvxpy.Variable(n)
-    M = sdp_constraints[0]
-    for i in range(m):
-        M = M + c[i] * sdp_constraints[i + 1]
-    for i in range(n):
-        M = M + s[i] * sdp_constraints[m + i + 1]
-    constraints = [M >> 0]
-
-    prob = cvxpy.Problem(objective, constraints)
-
-    try:
-        prob.solve(solver=cvxpy_solver)
-        fodf_sh = np.asarray(c.value).squeeze()
-    except Exception:
-        warnings.warn('Optimization did not find a solution')
-        try:
-            fodf_sh = np.dot(la.pinv(X), dwsignal)  # least squares
-        except la.LinAlgError:
-            fodf_sh = np.zeros(m)
-
-    return fodf_sh
 
 def odf_deconv(odf_sh, R, B_reg, lambda_=1., tau=0.1, r2_term=False):
     r""" ODF constrained-regularized spherical deconvolution using
