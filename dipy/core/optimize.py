@@ -5,6 +5,9 @@ import numpy as np
 import scipy.sparse as sps
 import scipy.optimize as opt
 from scipy.optimize import minimize
+from dipy.utils.optpkg import optional_package
+
+cvxpy, have_cvxpy, _ = optional_package("cvxpy")
 
 
 class Optimizer(object):
@@ -342,3 +345,93 @@ class NonNegativeLeastSquares(SKLearnLinearSolver):
         coef, rnorm = opt.nnls(X, y)
         self.coef_ = coef
         return self
+
+
+def rlslmi_problem(X, u, L, A):
+    r""" Regularized least squares with linear matrix inequality constraints
+
+    Generate a CVXPY representation of a regularized least squares optimization
+    problem subject to linear matrix inequality constraints.
+
+    Parameters
+    ----------
+    X : array (n, m)
+        Design matrix $X$.
+    u : float
+        Regularization parameter $u$.
+    L : array (l, n)
+        Regularization matrix $L$.
+    A : array (n + k + 1, p, p)
+        Constraint matrices $A$.
+
+    Returns
+    -------
+    problem : Problem
+         CVXPY problem with the measured signal $y$ (with length n) as a
+         parameter, that can be solved to produce the estimates of the problem
+         variables $h$ (with length m).
+
+    Notes
+    -----
+    The basic problem is to minimize
+
+    $\|X h - y\|^2 + u \|L h\|^2$
+
+    subject to the constraint that
+
+    $M=A_0 + \sum_{i=0}^{m-1} h_i A_{i+1} + \sum_{j=0}^{k-1} s_j A_{m+j+1} > 0$,
+
+    where $s_j$ are slack variables and where the inequality sign denotes
+    positive definiteness of the matrix $M$.
+
+    This formulation is used here mainly to enforce polynomial sum-of-squares
+    constraints on various models, as described in [1]_.
+
+    References
+    ----------
+    .. [1] Dela Haije et al. "Enforcing necessary non-negativity constraints
+           for common diffusion MRI models using sum of squares programming".
+           NeuroImage 209, 2020, 116405.
+    """
+
+    n, m = X.shape
+    k = A.shape[0] - m - 1
+
+    h = cvxpy.Variable(m)
+    s = cvxpy.Variable(k)
+    y = cvxpy.Parameter(n)
+
+    if Version(cvxpy.__version__) < Version('1.1'):
+        if not u:
+            objective = cvxpy.sum_squares(X*h - y)
+        else:
+            objective = cvxpy.sum_squares(X*h - y) + u * cvxpy.quad_form(h, L)
+    else:
+        if not u:
+            objective = cvxpy.sum_squares(X@h - y)
+        else:
+            objective = cvxpy.sum_squares(X@h - y) + u * cvxpy.quad_form(h, L)
+
+    M = A[0]
+    for i in range(m):
+        M += h[i] * A[i + 1]
+    for j in range(k):
+        M += s[j] * A[m + j + 1]
+    constraints = [M >> 0]
+
+    return cvxpy.Problem(objective, constraints)
+
+    # try:
+    #     prob.solve(solver=cvxpy_solver)
+    #     result = np.asarray(h.value).squeeze()
+    # except Exception:
+    #     msg = 'Constrained optimization failed, trying without constraints.'
+    #     warnings.warn(msg)
+    #     try:
+    #         #SMOOTH
+    #         fodf_sh = np.dot(la.pinv(X), y)  # least squares
+    #     except la.LinAlgError:
+    #         warnings.warn('Optimization failed.')
+    #         results = np.zeros(m)
+    #
+    # return result
