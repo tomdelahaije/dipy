@@ -35,8 +35,11 @@ from dipy.utils.deprecator import deprecate_with_version
 from dipy.reconst.odf import OdfModel, OdfFit
 from dipy.core.geometry import cart2sphere
 from dipy.core.onetime import auto_attr
+from dipy.data import real_sh_descoteaux_sdp_constraints
 from dipy.reconst.cache import Cache
+from dipy.utils.optpkg import optional_package
 
+cvxpy, have_cvxpy, _ = optional_package("cvxpy")
 
 descoteaux07_legacy_msg = \
     "The legacy descoteaux07 SH basis uses absolute values for negative " \
@@ -754,7 +757,8 @@ class SphHarmModel(OdfModel, Cache):
 class QballBaseModel(SphHarmModel):
     """To be subclassed by Qball type models."""
     def __init__(self, gtab, sh_order, smooth=0.006, min_signal=1e-5,
-                 assume_normed=False):
+                 assume_normed=False, positivity_constraint=False,
+                 cvxpy_solver=None):
         """Creates a model that can be used to fit or sample diffusion data
 
         Parameters
@@ -773,6 +777,20 @@ class QballBaseModel(SphHarmModel):
             If True, clipping and normalization of the data with respect to the
             mean B0 signal are skipped during mode fitting. This is an advanced
             feature and should be used with care.
+        positivity_constraint : bool
+            A boolean indicating whether the strict non-negativitiy constraints
+            described in [1]_ should be applied when fitting to spherical
+            harmonics. Default: False
+        cvxpy_solver : str (optional)
+            cvxpy solver name. Optionally optimize the positivity constraint
+            with a particular cvxpy solver. See http://www.cvxpy.org/ for
+            details. Default: None (cvxpy chooses its own solver)
+
+        References
+        ----------
+        .. [1] Dela Haije, T.C.J., et al. NeuroImage 2020. Enforcing necessary
+               non-negativity constraints for common diffusion MRI models using
+               sum of squares programming
 
         See Also
         --------
@@ -794,6 +812,18 @@ class QballBaseModel(SphHarmModel):
         self.B = B
         self.m = m
         self.n = n
+        self.positivity_constraint = positivity_constraint
+        if self.positivity_constraint:
+            if not have_cvxpy:
+                raise ValueError('CVXPY package needed to enforce constraints.')
+            if cvxpy_solver is not None:
+                if cvxpy_solver not in cvxpy.installed_solvers():
+                    msg = "Input `cvxpy_solver` was set to %s." % cvxpy_solver
+                    msg += " One of %s" % ', '.join(cvxpy.installed_solvers())
+                    msg += " was expected."
+                    raise ValueError(msg)
+            self.sdp_constraints = real_sh_descoteaux_sdp_constraints(sh_order)
+        self.cvxpy_solver = cvxpy_solver
         self._set_fit_matrix(B, L, F, smooth)
 
     def _set_fit_matrix(self, *args):
