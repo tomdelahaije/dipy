@@ -10,7 +10,7 @@ from dipy.reconst.csdeconv import csdeconv
 from dipy.reconst.shm import real_sh_descoteaux_from_index
 from scipy.special import gamma, hyp1f1
 from dipy.core.geometry import cart2sphere
-from dipy.core.optimize import problem_rls_lmi, problem_solve
+from dipy.core.optimize import PositiveDefiniteLeastSquares
 from dipy.data import default_sphere, real_sh_descoteaux_sdp_constraints
 from dipy.reconst.odf import OdfModel, OdfFit
 from scipy.optimize import leastsq
@@ -274,8 +274,8 @@ class ForecastModel(OdfModel, Cache):
                 coef = coef / coef[0] * c0
 
             if self.csdp:
-                problem = problem_rls_lmi(M, 0., [], self._sdp_constraints)
-                coef = problem_solve(problem, data_single_b0, self.cvxpy_solver)
+                sdp = PositiveDefiniteLeastSquares(M, self._sdp_constraints)
+                coef = sdp.solve(data_single_b0, self.cvxpy_solver)
                 coef = coef / coef[0] * c0
 
             if self.pos:

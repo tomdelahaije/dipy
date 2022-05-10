@@ -321,7 +321,7 @@ def real_sh_descoteaux_sdp_constraints(sh_order):
 
     Parameters
     ----------
-    sh_order : unsigned int,
+    sh_order : unsigned int
         An even integer that represent the order of the basis
 
     Returns

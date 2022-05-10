@@ -30,7 +30,7 @@ from dipy.core.geometry import vec2vec_rotmat
 from dipy.utils.deprecator import deprecate_with_version, deprecated_params
 from dipy.utils.optpkg import optional_package
 
-from dipy.core.optimize import problem_rls_lmi, problem_solve
+from dipy.core.optimize import PositiveDefiniteLeastSquares
 
 cvxpy, have_cvxpy, _ = optional_package("cvxpy")
 
@@ -316,16 +316,15 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
                     msg += " was expected."
                     raise ValueError(msg)
             self._sdp_constraints = real_sh_descoteaux_sdp_constraints(sh_order)
-            self.sdp_problem = problem_rls_lmi(self._X, 0., [],
-                                               self._sdp_constraints)
+            self.sdp = PositiveDefiniteLeastSquares(self._X,
+                                                    self._sdp_constraints)
         self.cvxpy_solver = cvxpy_solver
 
     @multi_voxel_fit
     def fit(self, data):
         dwi_data = data[self._where_dwi]
         if self.positivity_constraint:
-            shm_coeff = problem_solve(self.sdp_problem, dwi_data,
-                                      self.cvxpy_solver)
+            shm_coeff = self.sdp.solve(dwi_data, self.cvxpy_solver)
         else:
             shm_coeff, _ = csdeconv(dwi_data, self._X, self.B_reg, self.tau,
                                     convergence=self.convergence, P=self._P)

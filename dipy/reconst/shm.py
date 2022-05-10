@@ -34,7 +34,9 @@ from numpy.random import randint
 from dipy.utils.deprecator import deprecate_with_version
 from dipy.reconst.odf import OdfModel, OdfFit
 from dipy.core.geometry import cart2sphere
+from dipy.core.ndindex import ndindex
 from dipy.core.onetime import auto_attr
+from dipy.core.optimize import PositiveDefiniteLeastSquares
 from dipy.data import real_sh_descoteaux_sdp_constraints
 from dipy.reconst.cache import Cache
 from dipy.utils.optpkg import optional_package
@@ -822,11 +824,18 @@ class QballBaseModel(SphHarmModel):
                     msg += " One of %s" % ', '.join(cvxpy.installed_solvers())
                     msg += " was expected."
                     raise ValueError(msg)
-            self.sdp_constraints = real_sh_descoteaux_sdp_constraints(sh_order)
+            self._s = F * L / (8 * np.pi)
+            self._sdp_constraints = real_sh_descoteaux_sdp_constraints(sh_order)
+            self._set_sdp(B, L, F, smooth)
         self.cvxpy_solver = cvxpy_solver
         self._set_fit_matrix(B, L, F, smooth)
 
     def _set_fit_matrix(self, *args):
+        """Should be set in a subclass and is called by __init__"""
+        msg = "User must implement this method in a subclass"
+        raise NotImplementedError(msg)
+
+    def _set_sdp(self, *args):
         """Should be set in a subclass and is called by __init__"""
         msg = "User must implement this method in a subclass"
         raise NotImplementedError(msg)
@@ -946,13 +955,31 @@ class CsaOdfModel(QballBaseModel):
         F = F[:, None]
         self._fit_matrix = (F * L) / (8 * np.pi) * invB
 
+    def _set_sdp(self, B, L, F, smooth):
+        X = B
+        A = self._sdp_constraints
+        A[0] += A[1] * self._n0_const
+        for k in range(self._s.size):
+            A[k+1] *= self._s[k]
+        L = np.diag(smooth * np.square(L))
+        self._sdp = PositiveDefiniteLeastSquares(X, A, L)
+
     def _get_shm_coef(self, data, mask=None):
         """Returns the coefficients of the model"""
         data = data[..., self._where_dwi]
         data = data.clip(self.min, self.max)
         loglog_data = np.log(-np.log(data))
-        sh_coef = np.dot(loglog_data, self._fit_matrix.T)
+
+        if self.positivity_constraint:
+            dim = loglog_data.shape[:-1]
+            sh_coef = np.empty(dim + (self._s.size,))
+            for ijk in ndindex(dim):
+                sh_coef[ijk] = self._s * self._sdp.solve(
+                    loglog_data[ijk], solver=self.cvxpy_solver)
+        else:
+            sh_coef = np.dot(loglog_data, self._fit_matrix.T)
         sh_coef[..., 0] = self._n0_const
+
         return sh_coef
 
 
@@ -1004,9 +1031,29 @@ class QballModel(QballBaseModel):
         F = F[:, None]
         self._fit_matrix = F * invB
 
+    def _set_sdp(self, B, L, F, smooth):
+        X = B / F
+        A = self._sdp_constraints
+        for k in range(F.size):
+            A[k+1] /= F[k]
+        L = np.diag(smooth * np.square(L))
+        self._sdp = PositiveDefiniteLeastSquares(X, A, L)
+
     def _get_shm_coef(self, data, mask=None):
         """Returns the coefficients of the model"""
-        return np.dot(data[..., self._where_dwi], self._fit_matrix.T)
+
+        data = data[..., self._where_dwi]
+
+        if self.positivity_constraint:
+            dim = data.shape[:-1]
+            sh_coef = np.empty(dim + (self._s.size,))
+            for ijk in ndindex(dim):
+                sh_coef[ijk] = self._sdp.solve(data[ijk],
+                                               solver=self.cvxpy_solver)
+        else:
+            sh_coef = np.dot(data, self._fit_matrix.T)
+
+        return sh_coef
 
 
 def normalize_data(data, where_b0, min_signal=1e-5, out=None):
