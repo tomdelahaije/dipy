@@ -7,6 +7,7 @@ from os.path import join as pjoin, dirname
 
 import gzip
 import numpy as np
+from scipy.sparse import load_npz
 from dipy.core.gradients import GradientTable, gradient_table
 from dipy.core.sphere import Sphere, HemiSphere
 from dipy.data.fetcher import (get_fnames,
@@ -344,5 +345,5 @@ def real_sh_descoteaux_sdp_constraints(sh_order):
     arr = load_npz(pjoin(DATA_DIR, mf))
     n, x = arr.shape
     sdp_constraints = [arr[i*x:(i+1)*x] for i in range(n//x)]
-    
+
     return sdp_constraints
