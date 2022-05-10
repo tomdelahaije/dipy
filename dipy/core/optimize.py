@@ -393,7 +393,7 @@ class PositiveDefiniteLeastSquares(object):
         self.L = L
 
         n, m = X.shape
-        t = A.shape[0]
+        t = len(A)
         k = t - m - 1
 
         self._h = cvxpy.Variable(m)

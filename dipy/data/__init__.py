@@ -337,13 +337,12 @@ def real_sh_descoteaux_sdp_constraints(sh_order):
 
     """
 
-    mf = 'real_sh_descoteaux_constraint_' + str(sh_order) + '.csv'
-    coo = np.loadtxt(pjoin(DATA_DIR, mf), delimiter=",")
-    pos = coo[:, :3].astype(int)
-    val = coo[:, 3]
-    dim = list(map(max, zip(*(pos + 1))))
-    sdp_constraints = np.zeros(dim)
-    for i in range(coo.shape[0]):
-        sdp_constraints[tuple(pos[i])] = val[i]
-
+    if (not isinstance(sh_order, int) or
+            sh_order < 0 or sh_order > 10 or sh_order % 2):
+        raise ValueError("sh_order must be a non-negative, even integer.")
+    mf = 'real_sh_descoteaux_constraint_' + str(sh_order) + '.npz'
+    arr = load_npz(pjoin(DATA_DIR, mf))
+    n, x = arr.shape
+    sdp_constraints = [arr[i*x:(i+1)*x] for i in range(n//x)]
+    
     return sdp_constraints
