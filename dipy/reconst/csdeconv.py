@@ -10,7 +10,7 @@ import scipy.linalg as la
 import scipy.linalg.lapack as ll
 
 from dipy.data import small_sphere, get_sphere, default_sphere
-from dipy.data import real_sh_descoteaux_sdp_constraints
+from dipy.data import load_sdp_constraints
 
 from dipy.core.geometry import cart2sphere
 from dipy.core.ndindex import ndindex
@@ -315,7 +315,8 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
                     msg += " One of %s" % ', '.join(cvxpy.installed_solvers())
                     msg += " was expected."
                     raise ValueError(msg)
-            self._sdp_constraints = real_sh_descoteaux_sdp_constraints(sh_order)
+            self._sdp_constraints = load_sdp_constraints('real_sh_descoteaux',
+                                                         sh_order)
             self.sdp = PositiveDefiniteLeastSquares(self._X,
                                                     self._sdp_constraints)
         self.cvxpy_solver = cvxpy_solver

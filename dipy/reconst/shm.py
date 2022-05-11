@@ -37,7 +37,7 @@ from dipy.core.geometry import cart2sphere
 from dipy.core.ndindex import ndindex
 from dipy.core.onetime import auto_attr
 from dipy.core.optimize import PositiveDefiniteLeastSquares
-from dipy.data import real_sh_descoteaux_sdp_constraints
+from dipy.data import load_sdp_constraints
 from dipy.reconst.cache import Cache
 from dipy.utils.optpkg import optional_package
 
@@ -825,7 +825,8 @@ class QballBaseModel(SphHarmModel):
                     msg += " was expected."
                     raise ValueError(msg)
             self._s = F * L / (8 * np.pi)
-            self._sdp_constraints = real_sh_descoteaux_sdp_constraints(sh_order)
+            self._sdp_constraints = load_sdp_constraints('real_sh_descoteaux',
+                                                         sh_order)
             self._set_sdp(B, L, F, smooth)
         self.cvxpy_solver = cvxpy_solver
         self._set_fit_matrix(B, L, F, smooth)

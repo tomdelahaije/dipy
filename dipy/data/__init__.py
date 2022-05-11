@@ -3,7 +3,7 @@
 import json
 import pickle
 
-from os.path import join as pjoin, dirname
+from os.path import join as pjoin, dirname, exists
 
 import gzip
 import numpy as np
@@ -316,19 +316,27 @@ def matlab_life_results():
     return matlab_rmse, matlab_weights
 
 
-def real_sh_descoteaux_sdp_constraints(sh_order):
-    """Import semidefinite programming constraint matrices for real spherical
-    harmonic expansions, generated as described in [1]_.
+def load_sdp_constraints(id, order=None):
+    """Import semidefinite programming constraint matrices for different models,
+    generated as described for example in [1]_.
 
     Parameters
     ----------
-    sh_order : unsigned int
-        An even integer that represent the order of the basis
+    id : string
+        A string identifying the model that is to be constrained.
+    order : unsigned int
+        A non-negative integer that represent the order or instance of the
+        model.
+        Default: None.
 
     Returns
     -------
     sdp_constraints : array
         Constraint matrices
+
+    Notes
+    -----
+    The constraints will be loaded from a file named 'id_constraint_order.npz'.
 
     References
     ----------
@@ -338,12 +346,19 @@ def real_sh_descoteaux_sdp_constraints(sh_order):
 
     """
 
-    if (not isinstance(sh_order, int) or
-            sh_order < 0 or sh_order > 10 or sh_order % 2):
-        raise ValueError("sh_order must be a non-negative, even integer.")
-    mf = 'real_sh_descoteaux_constraint_' + str(sh_order) + '.npz'
-    arr = load_npz(pjoin(DATA_DIR, mf))
-    n, x = arr.shape
-    sdp_constraints = [arr[i*x:(i+1)*x] for i in range(n//x)]
+    file = id + '_constraint'
+    if order is not None:
+        file += '_' + str(order)
+    file += '.npz'
+    path = pjoin(DATA_DIR, file)
 
-    return sdp_constraints
+    if not exists(path):
+        raise ValueError("Constraints file '" + file + "' not found.")
+
+    try:
+        array = load_npz(path)
+        n, x = array.shape
+        sdp_constraints = [array[i*x:(i+1)*x] for i in range(n//x)]
+        return sdp_constraints
+    except:
+        raise ValueError("Failed to read constraints file '" + file + "'.")
