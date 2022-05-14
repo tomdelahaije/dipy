@@ -325,7 +325,7 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
     def fit(self, data):
         dwi_data = data[self._where_dwi]
         if self.positivity_constraint:
-            shm_coeff = self.sdp.solve(dwi_data, self.cvxpy_solver)
+            shm_coeff = self.sdp.solve(dwi_data, solver=self.cvxpy_solver)
         else:
             shm_coeff, _ = csdeconv(dwi_data, self._X, self.B_reg, self.tau,
                                     convergence=self.convergence, P=self._P)

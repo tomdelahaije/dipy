@@ -275,7 +275,7 @@ class ForecastModel(OdfModel, Cache):
 
             if self.csdp:
                 sdp = PositiveDefiniteLeastSquares(M, self._sdp_constraints)
-                coef = sdp.solve(data_single_b0, self.cvxpy_solver)
+                coef = sdp.solve(data_single_b0, solver=self.cvxpy_solver)
                 coef = coef / coef[0] * c0
 
             if self.pos:
