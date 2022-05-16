@@ -11,7 +11,7 @@ from dipy.reconst.shm import real_sh_descoteaux_from_index
 from scipy.special import gamma, hyp1f1
 from dipy.core.geometry import cart2sphere
 from dipy.core.optimize import PositiveDefiniteLeastSquares
-from dipy.data import default_sphere, real_sh_descoteaux_sdp_constraints
+from dipy.data import default_sphere, load_sdp_constraints
 from dipy.reconst.odf import OdfModel, OdfFit
 from scipy.optimize import leastsq
 from dipy.utils.optpkg import optional_package
@@ -198,8 +198,10 @@ class ForecastModel(OdfModel, Cache):
             if have_cvxpy:
                 self.wls = False
                 self.csdp = True
-                self._sdp_constraints = real_sh_descoteaux_sdp_constraints(
-                    self.sh_order)
+                self._sdp_constraints = load_sdp_constraints(
+                    'real_sh_descoteaux', sh_order)
+                self.sdp = PositiveDefiniteLeastSquares(self.rho.shape[1],
+                                                        A=self._sdp_constraints)
                 self.cvxpy_solver = None
             else:
                 msg = 'cvxpy is needed to inforce positivity constraints.'
@@ -274,8 +276,8 @@ class ForecastModel(OdfModel, Cache):
                 coef = coef / coef[0] * c0
 
             if self.csdp:
-                sdp = PositiveDefiniteLeastSquares(M, self._sdp_constraints)
-                coef = sdp.solve(data_single_b0, solver=self.cvxpy_solver)
+                coef = self.sdp.solve(M, data_single_b0,
+                                      solver=self.cvxpy_solver)
                 coef = coef / coef[0] * c0
 
             if self.pos:

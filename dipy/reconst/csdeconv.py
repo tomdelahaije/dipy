@@ -317,15 +317,16 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
                     raise ValueError(msg)
             self._sdp_constraints = load_sdp_constraints('real_sh_descoteaux',
                                                          sh_order)
-            self.sdp = PositiveDefiniteLeastSquares(self._X,
-                                                    self._sdp_constraints)
+            self.sdp = PositiveDefiniteLeastSquares(self._X.shape[1],
+                                                    A=self._sdp_constraints)
         self.cvxpy_solver = cvxpy_solver
 
     @multi_voxel_fit
     def fit(self, data):
         dwi_data = data[self._where_dwi]
         if self.positivity_constraint:
-            shm_coeff = self.sdp.solve(dwi_data, solver=self.cvxpy_solver)
+            shm_coeff = self.sdp.solve(self._X, dwi_data,
+                                       solver=self.cvxpy_solver)
         else:
             shm_coeff, _ = csdeconv(dwi_data, self._X, self.B_reg, self.tau,
                                     convergence=self.convergence, P=self._P)

@@ -957,13 +957,13 @@ class CsaOdfModel(QballBaseModel):
         self._fit_matrix = (F * L) / (8 * np.pi) * invB
 
     def _set_sdp(self, B, L, F, smooth):
-        X = B
+        self._X = B
         A = self._sdp_constraints
         A[0] += A[1] * self._n0_const
         for k in range(self._s.size):
             A[k+1] *= self._s[k]
         L = np.diag(smooth * np.square(L))
-        self._sdp = PositiveDefiniteLeastSquares(X, A, L)
+        self._sdp = PositiveDefiniteLeastSquares(B.shape[1], A, L)
 
     def _get_shm_coef(self, data, mask=None):
         """Returns the coefficients of the model"""
@@ -976,7 +976,7 @@ class CsaOdfModel(QballBaseModel):
             sh_coef = np.empty(dim + (self._s.size,))
             for ijk in ndindex(dim):
                 sh_coef[ijk] = self._s * self._sdp.solve(
-                    loglog_data[ijk], solver=self.cvxpy_solver)
+                    self._X, loglog_data[ijk], solver=self.cvxpy_solver)
         else:
             sh_coef = np.dot(loglog_data, self._fit_matrix.T)
         sh_coef[..., 0] = self._n0_const
@@ -1033,12 +1033,12 @@ class QballModel(QballBaseModel):
         self._fit_matrix = F * invB
 
     def _set_sdp(self, B, L, F, smooth):
-        X = B / F
+        self._X = B / F
         A = self._sdp_constraints
         for k in range(F.size):
             A[k+1] /= F[k]
         L = np.diag(smooth * np.square(L))
-        self._sdp = PositiveDefiniteLeastSquares(X, A, L)
+        self._sdp = PositiveDefiniteLeastSquares(B.shape[1], A, L)
 
     def _get_shm_coef(self, data, mask=None):
         """Returns the coefficients of the model"""
@@ -1049,7 +1049,7 @@ class QballModel(QballBaseModel):
             dim = data.shape[:-1]
             sh_coef = np.empty(dim + (self._s.size,))
             for ijk in ndindex(dim):
-                sh_coef[ijk] = self._sdp.solve(data[ijk],
+                sh_coef[ijk] = self._sdp.solve(self._X, data[ijk],
                                                solver=self.cvxpy_solver)
         else:
             sh_coef = np.dot(data, self._fit_matrix.T)
