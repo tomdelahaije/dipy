@@ -9,8 +9,9 @@ import numpy as np
 
 from packaging.version import Version
 
+from dipy.core.optimize import PositiveDefiniteLeastSquares
+from dipy.data import load_sdp_constraints
 from dipy.reconst.base import ReconstModel
-from dipy.core.ndindex import ndindex
 from dipy.reconst.dti import auto_attr
 from dipy.utils.optpkg import optional_package
 
@@ -526,7 +527,7 @@ def _sdpdc_fit(data, mask, X, cvxpy_solver=None):
         Array with the same shape as the data array of a single acquisition.
     X : numpy.ndarray
         Design matrix of shape (number of acquisitions, 28).
-    cvxpy_solver: string, required
+    cvxpy_solver: string, optional
         The name of the SDP solver to be used. Default: None
 
     Returns
@@ -544,14 +545,6 @@ def _sdpdc_fit(data, mask, X, cvxpy_solver=None):
         Ozarslan E., "Q-space trajectory imaging with positivity constraints
         (QTI+)" in Neuroimage, Volume 238, 2021.
     """
-
-    if not have_cvxpy:
-        raise ValueError('CVXPY package needed to enforce constraints')
-
-    if cvxpy_solver is not None:
-        if cvxpy_solver not in cp.installed_solvers():
-            raise ValueError('The selected solver is not available')
-
     params = np.zeros((np.product(mask.shape), 28)) * np.nan
     data_masked = data[mask]
     size, nvols = data_masked.shape
@@ -605,6 +598,84 @@ def _sdpdc_fit(data, mask, X, cvxpy_solver=None):
     return params
 
 
+def _cls_fit(sdp, data, mask, X, cvxpy_solver=None):
+    """Estimate the model parameters using ordinary least squares with convexity
+    constraints.
+
+    Parameters
+    ----------
+    sdp : PositiveDefiniteLeastSquares instance
+        A CVXPY representation of a regularized least squares optimization
+        problem.
+    data : numpy.ndarray
+        Array of shape (..., number of acquisitions).
+    mask : numpy.ndarray
+        Boolean array with the same shape as the data array of a single
+        acquisition.
+    X : numpy.ndarray
+        Design matrix of shape (number of acquisitions, 28).
+
+    Returns
+    -------
+    params : numpy.ndarray
+        Array of shape (..., 28) containing the estimated model parameters.
+        Element 0 is the natural logarithm of the estimated signal without
+        diffusion-weighting, elements 1-6 are the estimated diffusion tensor
+        elements in Voigt notation, and elements 7-27 are the estimated
+        covariance tensor elements in Voigt notation.
+    """
+    params = np.zeros((np.product(mask.shape), 28)) * np.nan
+    data_masked = data[mask]
+    size = len(data_masked)
+    params_masked = np.zeros((size, 28))
+    for i in range(size):
+        S = np.log(data_masked[i])
+        params_masked[i] = sdp.solve(X, S, solver=cvxpy_solver)
+    params[np.where(mask.ravel())] = params_masked
+    params = params.reshape((mask.shape + (28,)))
+    return params
+
+
+def _cwls_fit(sdp, data, mask, X, cvxpy_solver=None):
+    """Estimate the model parameters using weighted least squares with convexity
+    constraints.
+
+    Parameters
+    ----------
+    sdp : PositiveDefiniteLeastSquares instance
+        A CVXPY representation of a regularized least squares optimization
+        problem.
+    data : numpy.ndarray
+        Array of shape (..., number of acquisitions).
+    mask : numpy.ndarray
+        Boolean array with the same shape as the data array of a single
+        acquisition.
+    X : numpy.ndarray
+        Design matrix of shape (number of acquisitions, 28).
+
+    Returns
+    -------
+    params : numpy.ndarray
+        Array of shape (..., 28) containing the estimated model parameters.
+        Element 0 is the natural logarithm of the estimated signal without
+        diffusion-weighting, elements 1-6 are the estimated diffusion tensor
+        elements in Voigt notation, and elements 7-27 are the estimated
+        covariance tensor elements in Voigt notation.
+    """
+    params = np.zeros((np.product(mask.shape), 28)) * np.nan
+    data_masked = data[mask]
+    size = len(data_masked)
+    params_masked = np.zeros((size, 28))
+    for i in range(size):
+        d = data_masked[i]
+        W = np.diag(d)
+        S = np.dot(W, np.log(d))
+        params_masked[i] = sdp.solve(np.dot(W, X), S, solver=cvxpy_solver)
+    params[np.where(mask.ravel())] = params_masked
+    params = params.reshape((mask.shape + (28,)))
+    return params
+
+
 class QtiModel(ReconstModel):
 
     def __init__(self, gtab, fit_method='WLS', cvxpy_solver=None):
@@ -623,6 +694,10 @@ class QtiModel(ReconstModel):
                 'SDPDc' for semidefinite programming with positivity constraints
                     applied [2]_
                     :func:`qti._sdpdc_fit`
+                'CLS' for ordinary least squares with convexity constraints
+                    :func:`qti._cls_fit`
+                'CWLS' for weighted least squares with convexity constraints
+                    :func:`qti._cwls_fit`
         cvxpy_solver: str, optional
             solver for the SDP formulation. default: None
 
@@ -654,10 +729,27 @@ class QtiModel(ReconstModel):
         except KeyError:
             raise ValueError(
                 'Invalid value (%s) for \'fit_method\'.' % fit_method
-                + ' Options: \'OLS\', \'WLS\', \'SDPdc\'.'
+                + " Options: 'OLS', 'WLS', 'SDPdc', 'CLS', 'CWLS'."
             )
 
-        self.cvxpy_solver = cvxpy_solver
+        self.convexity_constraint = fit_method in {'CLS', 'CWLS'}
+        if self.convexity_constraint:
+            self.sdp_constraints = load_sdp_constraints('qti')
+            self.sdp = PositiveDefiniteLeastSquares(28, A=self.sdp_constraints)
+
+        self.sdpdc_constraint = fit_method == 'SDPdc'
+
+        if self.sdpdc_constraint or self.convexity_constraint:
+            if not have_cvxpy:
+                raise ValueError('CVXPY package needed to enforce constraints.')
+            if cvxpy_solver is not None:
+                if cvxpy_solver not in cp.installed_solvers():
+                    msg = "Input `cvxpy_solver` was set to %s." % cvxpy_solver
+                    msg += " One of %s" % ', '.join(cp.installed_solvers())
+                    msg += " was expected."
+                    raise ValueError(msg)
+            self.cvxpy_solver = cvxpy_solver
+
         self.fit_method_name = fit_method
 
     def fit(self, data, mask=None):
@@ -681,8 +773,11 @@ class QtiModel(ReconstModel):
             if mask.shape != data.shape[:-1]:
                 raise ValueError('Mask is not the same shape as data.')
             mask = np.array(mask, dtype=bool, copy=False)
-        if self.fit_method_name == 'SDPdc':
+        if self.sdpdc_constraint:
             params = self.fit_method(data, mask, self.X, self.cvxpy_solver)
+        elif self.convexity_constraint:
+            params = self.fit_method(self.sdp, data, mask, self.X,
+                                     cvxpy_solver=self.cvxpy_solver)
         else:
             params = self.fit_method(data, mask, self.X)
         return QtiFit(params)
@@ -1111,4 +1206,5 @@ class QtiFit(object):
         return k_mu
 
 
-common_fit_methods = {'OLS': _ols_fit, 'WLS': _wls_fit, 'SDPdc': _sdpdc_fit}
+common_fit_methods = {'OLS': _ols_fit, 'WLS': _wls_fit, 'SDPdc': _sdpdc_fit,
+                      'CLS': _cls_fit, 'CWLS': _cwls_fit}
