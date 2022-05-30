@@ -13,6 +13,7 @@ from dipy.core.optimize import PositiveDefiniteLeastSquares
 from dipy.data import load_sdp_constraints
 from dipy.reconst.base import ReconstModel
 from dipy.reconst.dti import auto_attr
+from dipy.reconst.multi_voxel import multi_voxel_fit
 from dipy.utils.optpkg import optional_package
 
 cp, have_cvxpy, _ = optional_package("cvxpy")
@@ -428,20 +429,17 @@ def design_matrix(btens):
     return X
 
 
-def _ols_fit(data, mask, X, step=int(1e4)):
+def _ols_fit(data, X, Xinv):
     """Estimate the model parameters using ordinary least squares.
 
     Parameters
     ----------
     data : numpy.ndarray
-        Array of shape (..., number of acquisitions).
-    mask : numpy.ndarray
-        Boolean array with the same shape as the data array of a single
-        acquisition.
+        Signal array of shape (number of acquisitions).
     X : numpy.ndarray
         Design matrix of shape (number of acquisitions, 28).
-    step : int, optional
-        The number of voxels over which the fit is calculated simultaneously.
+    Xinv : numpy.ndarray
+        Inverse of the design matrix.
 
     Returns
     -------
@@ -452,37 +450,22 @@ def _ols_fit(data, mask, X, step=int(1e4)):
         elements in Voigt notation, and elements 7-27 are the estimated
         covariance tensor elements in Voigt notation.
     """
-    params = np.zeros((np.product(mask.shape), 28)) * np.nan
-    data_masked = data[mask]
-    size = len(data_masked)
-    X_inv = np.linalg.pinv(X.T @ X)  # Independent of data
-    if step >= size:  # Fit over all data simultaneously
-        S = np.log(data_masked)[..., np.newaxis]
-        params_masked = (X_inv @ X.T @ S)[..., 0]
-    else:  # Iterate over data
-        params_masked = np.zeros((size, 28))
-        for i in range(0, size, step):
-            S = np.log(data_masked[i:i + step])[..., np.newaxis]
-            params_masked[i:i + step] = (X_inv @ X.T @ S)[..., 0]
-    params[np.where(mask.ravel())] = params_masked
-    params = params.reshape((mask.shape + (28,)))
+    params = Xinv @ np.log(data)
     return params
 
 
-def _wls_fit(data, mask, X, step=int(1e4)):
+def _wls_fit(data, X, Xinv):
     """Estimate the model parameters using weighted least squares with the
     signal magnitudes as weights.
 
     Parameters
     ----------
     data : numpy.ndarray
-        Array of shape (..., number of acquisitions).
-    mask : numpy.ndarray
-        Array with the same shape as the data array of a single acquisition.
+        Signal array of shape (number of acquisitions).
     X : numpy.ndarray
         Design matrix of shape (number of acquisitions, 28).
-    step : int, optional
-        The number of voxels over which the fit is calculated simultaneously.
+    Xinv : numpy.ndarray
+        Inverse of the design matrix.
 
     Returns
     -------
@@ -493,38 +476,20 @@ def _wls_fit(data, mask, X, step=int(1e4)):
         elements in Voigt notation, and elements 7-27 are the estimated
         covariance tensor elements in Voigt notation.
     """
-    params = np.zeros((np.product(mask.shape), 28)) * np.nan
-    data_masked = data[mask]
-    size = len(data_masked)
-    if step >= size:  # Fit over all data simultaneously
-        S = np.log(data_masked)[..., np.newaxis]
-        C = data_masked[:, np.newaxis, :]
-        B = X.T * C
-        A = np.linalg.pinv(B @ X)
-        params_masked = (A @ B @ S)[..., 0]
-    else:  # Iterate over data
-        params_masked = np.zeros((size, 28))
-        for i in range(0, size, step):
-            S = np.log(data_masked[i:i + step])[..., np.newaxis]
-            C = data_masked[i:i + step][:, np.newaxis, :]
-            B = X.T * C
-            A = np.linalg.pinv(B @ X)
-            params_masked[i:i + step] = (A @ B @ S)[..., 0]
-    params[np.where(mask.ravel())] = params_masked
-    params = params.reshape((mask.shape + (28,)))
+    B = X.T * data
+    A = np.linalg.pinv(B @ X)
+    params = A @ B @ np.log(data)
     return params
 
 
-def _sdpdc_fit(data, mask, X, cvxpy_solver=None):
+def _sdpdc_fit(data, X, cvxpy_solver=None):
     """Estimate the model parameters using Semidefinite Programming (SDP),
     while enforcing positivity constraints on the D and C tensors (SDPdc) [2]_
 
     Parameters
     ----------
     data : numpy.ndarray
-        Array of shape (..., number of acquisitions).
-    mask : numpy.ndarray
-        Array with the same shape as the data array of a single acquisition.
+        Signal array of shape (number of acquisitions).
     X : numpy.ndarray
         Design matrix of shape (number of acquisitions, 28).
     cvxpy_solver: string, optional
@@ -542,21 +507,19 @@ def _sdpdc_fit(data, mask, X, cvxpy_solver=None):
     References
     ----------
     .. [2] Herberthson M., Boito D., Dela Haije T., Feragen A., Westin C.-F.,
-        Ozarslan E., "Q-space trajectory imaging with positivity constraints
-        (QTI+)" in Neuroimage, Volume 238, 2021.
+           Ozarslan E., "Q-space trajectory imaging with positivity constraints
+           (QTI+)" in Neuroimage, Volume 238, 2021.
     """
-    params = np.zeros((np.product(mask.shape), 28)) * np.nan
-    data_masked = data[mask]
-    size, nvols = data_masked.shape
-    scale = np.maximum(np.max(data_masked, axis=1, keepdims=True), 1)
-    data_masked = data_masked / scale
-    data_masked[data_masked < 0] = 0
-    log_data = np.log(data_masked)
-    params_masked = np.zeros((size, 28))
+    scale = np.max(data)
+    scale = scale if scale > 1. else 1.
+    data_scaled = data / scale
+    log_data = np.asarray([np.log(data_scaled)]).T
+
+    W = np.diag(data_scaled)
+    y = W @ log_data
+    A = W @ X
 
     x = cp.Variable((28, 1))
-    y = cp.Parameter((nvols, 1))
-    A = cp.Parameter((nvols, 28))
     dc = cvxpy_1x6_to_3x3(x[1:7])
     cc = cvxpy_1x21_to_6x6(x[7:])
     constraints = [dc >> 0, cc >> 0]
@@ -567,38 +530,28 @@ def _sdpdc_fit(data, mask, X, cvxpy_solver=None):
     prob = cp.Problem(objective, constraints)
     unconstrained = cp.Problem(objective)
 
-    for i in range(0, size, 1):
-        vox_data = data_masked[i:i+1, :].T
-        vox_log_data = log_data[i:i+1, :].T
-        vox_log_data[np.isinf(vox_log_data)] = 0
-        y.value = (vox_data * vox_log_data)
-        A.value = vox_data * X
-
+    try:
+        prob.solve(solver=cvxpy_solver, verbose=False)
+        params = np.squeeze(x.value)
+    except Exception:
+        msg = 'Constrained optimization failed, attempting unconstrained'
+        msg += ' optimization.'
+        warn(msg)
         try:
-            prob.solve(solver=cvxpy_solver, verbose=False)
-            m = x.value
+            unconstrained.solve(solver=cvxpy_solver)
+            params = np.squeeze(x.value)
         except Exception:
-            msg = 'Constrained optimization failed, attempting unconstrained'
-            msg += ' optimization.'
+            msg = 'Unconstrained optimization failed,'
+            msg += ' returning zero array.'
             warn(msg)
-            try:
-                unconstrained.solve(solver=cvxpy_solver)
-                m = x.value
-            except Exception:
-                msg = 'Unconstrained optimization failed,'
-                msg += ' returning zero array.'
-                warn(msg)
-                m = np.zeros(x.shape)
+            return np.zeros(x.shape)
 
-        params_masked[i:i+1, :] = m.T
+    params[0] += np.log(scale)
 
-    params_masked[:, 0] += np.log(scale[:, 0])
-    params[np.where(mask.ravel())] = params_masked
-    params = params.reshape((mask.shape + (28,)))
     return params
 
 
-def _cls_fit(sdp, data, mask, X, cvxpy_solver=None):
+def _cls_fit(sdp, data, X, cvxpy_solver=None):
     """Estimate the model parameters using ordinary least squares with convexity
     constraints.
 
@@ -624,19 +577,11 @@ def _cls_fit(sdp, data, mask, X, cvxpy_solver=None):
         elements in Voigt notation, and elements 7-27 are the estimated
         covariance tensor elements in Voigt notation.
     """
-    params = np.zeros((np.product(mask.shape), 28)) * np.nan
-    data_masked = data[mask]
-    size = len(data_masked)
-    params_masked = np.zeros((size, 28))
-    for i in range(size):
-        S = np.log(data_masked[i])
-        params_masked[i] = sdp.solve(X, S, solver=cvxpy_solver)
-    params[np.where(mask.ravel())] = params_masked
-    params = params.reshape((mask.shape + (28,)))
+    params = sdp.solve(X, np.log(data), solver=cvxpy_solver)
     return params
 
 
-def _cwls_fit(sdp, data, mask, X, cvxpy_solver=None):
+def _cwls_fit(sdp, data, X, cvxpy_solver=None):
     """Estimate the model parameters using weighted least squares with convexity
     constraints.
 
@@ -662,17 +607,9 @@ def _cwls_fit(sdp, data, mask, X, cvxpy_solver=None):
         elements in Voigt notation, and elements 7-27 are the estimated
         covariance tensor elements in Voigt notation.
     """
-    params = np.zeros((np.product(mask.shape), 28)) * np.nan
-    data_masked = data[mask]
-    size = len(data_masked)
-    params_masked = np.zeros((size, 28))
-    for i in range(size):
-        d = data_masked[i]
-        W = np.diag(d)
-        S = np.dot(W, np.log(d))
-        params_masked[i] = sdp.solve(np.dot(W, X), S, solver=cvxpy_solver)
-    params[np.where(mask.ravel())] = params_masked
-    params = params.reshape((mask.shape + (28,)))
+    W = np.diag(data)
+    S = np.dot(W, np.log(data))
+    params = sdp.solve(np.dot(W, X), S, solver=cvxpy_solver)
     return params
 
 
@@ -715,7 +652,9 @@ class QtiModel(ReconstModel):
         if self.gtab.btens is None:
             raise ValueError(
                 'QTI requires b-tensors to be defined in the gradient table.')
+
         self.X = design_matrix(self.gtab.btens)
+
         rank = np.linalg.matrix_rank(self.X.T @ self.X)
         if rank < 28:
             warn(
@@ -724,6 +663,8 @@ class QtiModel(ReconstModel):
                 'tensor to be estimated (rank(X.T @ X) = %s < 28).' % rank
             )
 
+        self.Xinv = np.linalg.pinv(self.X)
+
         try:
             self.fit_method = common_fit_methods[fit_method]
         except KeyError:
@@ -731,6 +672,7 @@ class QtiModel(ReconstModel):
                 'Invalid value (%s) for \'fit_method\'.' % fit_method
                 + " Options: 'OLS', 'WLS', 'SDPdc', 'CLS', 'CWLS'."
             )
+        self.fit_method_name = fit_method
 
         self.convexity_constraint = fit_method in {'CLS', 'CWLS'}
         if self.convexity_constraint:
@@ -750,37 +692,46 @@ class QtiModel(ReconstModel):
                     raise ValueError(msg)
             self.cvxpy_solver = cvxpy_solver
 
-        self.fit_method_name = fit_method
-
-    def fit(self, data, mask=None):
-        """Fit QTI to data.
-
-        Parameters
-        ----------
-        data : numpy.ndarray
-            Array of shape (..., number of acquisitions).
-        mask : numpy.ndarray, optional
-            Array with the same shape as the data array of a single acquisition.
-
-        Returns
-        -------
-        qtifit : dipy.reconst.qti.QtiFit
-            The fitted model.
-        """
-        if mask is None:
-            mask = np.ones(data.shape[:-1], dtype=bool)
-        else:
-            if mask.shape != data.shape[:-1]:
-                raise ValueError('Mask is not the same shape as data.')
-            mask = np.array(mask, dtype=bool, copy=False)
+    @multi_voxel_fit
+    def fit(self, data):
         if self.sdpdc_constraint:
-            params = self.fit_method(data, mask, self.X, self.cvxpy_solver)
+            params = self.fit_method(data, self.X,
+                                     cvxpy_solver=self.cvxpy_solver)
         elif self.convexity_constraint:
-            params = self.fit_method(self.sdp, data, mask, self.X,
+            params = self.fit_method(self.sdp, data, self.X,
                                      cvxpy_solver=self.cvxpy_solver)
         else:
-            params = self.fit_method(data, mask, self.X)
+            params = self.fit_method(data, self.X, self.Xinv)
         return QtiFit(params)
+    # def fit(self, data, mask=None):
+    #     """Fit QTI to data.
+    #
+    #     Parameters
+    #     ----------
+    #     data : numpy.ndarray
+    #         Array of shape (..., number of acquisitions).
+    #     mask : numpy.ndarray, optional
+    #         Array with the same shape as the data array of a single acquisition.
+    #
+    #     Returns
+    #     -------
+    #     qtifit : dipy.reconst.qti.QtiFit
+    #         The fitted model.
+    #     """
+    #     if mask is None:
+    #         mask = np.ones(data.shape[:-1], dtype=bool)
+    #     else:
+    #         if mask.shape != data.shape[:-1]:
+    #             raise ValueError('Mask is not the same shape as data.')
+    #         mask = np.array(mask, dtype=bool, copy=False)
+    #     if self.sdpdc_constraint:
+    #         params = self.fit_method(data, mask, self.X, self.cvxpy_solver)
+    #     elif self.convexity_constraint:
+    #         params = self.fit_method(self.sdp, data, mask, self.X,
+    #                                  cvxpy_solver=self.cvxpy_solver)
+    #     else:
+    #         params = self.fit_method(data, mask, self.X)
+    #     return QtiFit(params)
 
     def predict(self, params):
         """Generate signals from this model class instance and given parameters.
