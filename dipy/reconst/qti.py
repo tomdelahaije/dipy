@@ -171,19 +171,20 @@ def from_21x1_to_6x6(V):
     if V.shape[-2::] != (21, 1):
         raise ValueError('The shape of the input array must be (..., 21, 1).')
     C = 1 / np.sqrt(2)
-    T = np.array(
-        ([V[..., 0, 0], C * V[..., 5, 0], C * V[..., 4, 0],
-          C * V[..., 6, 0], C * V[..., 7, 0], C * V[..., 8, 0]],
-         [C * V[..., 5, 0], V[..., 1, 0], C * V[..., 3, 0],
-          C * V[..., 9, 0], C * V[..., 10, 0], C * V[..., 11, 0]],
-         [C * V[..., 4, 0], C * V[..., 3, 0], V[..., 2, 0],
-          C * V[..., 12, 0], C * V[..., 13, 0], C * V[..., 14, 0]],
-         [C * V[..., 6, 0], C * V[..., 9, 0], C * V[..., 12, 0],
-          V[..., 15, 0], C * V[..., 18, 0], C * V[..., 20, 0]],
-         [C * V[..., 7, 0], C * V[..., 10, 0], C * V[..., 13, 0],
-          C * V[..., 18, 0], V[..., 16, 0], C * V[..., 19, 0]],
-         [C * V[..., 8, 0], C * V[..., 11, 0], C * V[..., 14, 0],
-          C * V[..., 20, 0], C * V[..., 19, 0], V[..., 17, 0]]))
+    T = np.array((
+        [    V[...,  0, 0], C * V[...,  5, 0], C * V[...,  4, 0],
+         C * V[...,  6, 0], C * V[...,  7, 0], C * V[...,  8, 0]],
+        [C * V[...,  5, 0],     V[...,  1, 0], C * V[...,  3, 0],
+         C * V[...,  9, 0], C * V[..., 10, 0], C * V[..., 11, 0]],
+        [C * V[...,  4, 0], C * V[...,  3, 0],     V[...,  2, 0],
+         C * V[..., 12, 0], C * V[..., 13, 0], C * V[..., 14, 0]],
+        [C * V[...,  6, 0], C * V[...,  9, 0], C * V[..., 12, 0],
+             V[..., 15, 0], C * V[..., 18, 0], C * V[..., 20, 0]],
+        [C * V[...,  7, 0], C * V[..., 10, 0], C * V[..., 13, 0],
+         C * V[..., 18, 0],     V[..., 16, 0], C * V[..., 19, 0]],
+        [C * V[...,  8, 0], C * V[..., 11, 0], C * V[..., 14, 0],
+         C * V[..., 20, 0], C * V[..., 19, 0],     V[..., 17, 0]]
+    ))
     T = np.moveaxis(T, (0, 1), (-2, -1))
     return T
 
@@ -424,8 +425,7 @@ def design_matrix(btens):
     for i, bten in enumerate(btens):
         b = from_3x3_to_6x1(bten)
         b_sq = from_6x6_to_21x1(b @ b.T)
-        X[i] = np.concatenate(
-            ([1], (-b.T)[0, :], (0.5 * b_sq.T)[0, :]))
+        X[i] = np.concatenate(([1], (-b.T)[0, :], (0.5 * b_sq.T)[0, :]))
     return X
 
 
@@ -644,8 +644,8 @@ class QtiModel(ReconstModel):
            multidimensional diffusion MRI of the human brain." Neuroimage 135
            (2016): 345-362. https://doi.org/10.1016/j.neuroimage.2016.02.039.
         .. [2] Herberthson M., Boito D., Dela Haije T., Feragen A., Westin CF.,
-            Ozarslan E., "Q-space trajectory imaging with positivity
-            constraints (QTI+)" in Neuroimage, Volume 238, 2021.
+           Ozarslan E., "Q-space trajectory imaging with positivity constraints
+           (QTI+)" in Neuroimage, Volume 238, 2021.
         """
         ReconstModel.__init__(self, gtab)
 
@@ -677,11 +677,13 @@ class QtiModel(ReconstModel):
         self.convexity_constraint = fit_method in {'CLS', 'CWLS'}
         if self.convexity_constraint:
             self.sdp_constraints = load_sdp_constraints('qti')
-            self.sdp = PositiveDefiniteLeastSquares(28, A=self.sdp_constraints)
 
         self.sdpdc_constraint = fit_method == 'SDPdc'
+        if self.sdpdc_constraint:
+            self.sdp_constraints = load_sdp_constraints('qtip')
 
-        if self.sdpdc_constraint or self.convexity_constraint:
+        self.sdp_constraint = self.sdpdc_constraint or self.convexity_constraint
+        if self.sdp_constraint:
             if not have_cvxpy:
                 raise ValueError('CVXPY package needed to enforce constraints.')
             if cvxpy_solver is not None:
@@ -691,47 +693,19 @@ class QtiModel(ReconstModel):
                     msg += " was expected."
                     raise ValueError(msg)
             self.cvxpy_solver = cvxpy_solver
+            self.sdp = PositiveDefiniteLeastSquares(28, A=self.sdp_constraints)
 
     @multi_voxel_fit
     def fit(self, data):
-        if self.sdpdc_constraint:
-            params = self.fit_method(data, self.X,
-                                     cvxpy_solver=self.cvxpy_solver)
-        elif self.convexity_constraint:
+        # if self.sdpdc_constraint:
+        #     params = self.fit_method(data, self.X,
+        #                              cvxpy_solver=self.cvxpy_solver)
+        if self.sdp_constraint:
             params = self.fit_method(self.sdp, data, self.X,
                                      cvxpy_solver=self.cvxpy_solver)
         else:
             params = self.fit_method(data, self.X, self.Xinv)
         return QtiFit(params)
-    # def fit(self, data, mask=None):
-    #     """Fit QTI to data.
-    #
-    #     Parameters
-    #     ----------
-    #     data : numpy.ndarray
-    #         Array of shape (..., number of acquisitions).
-    #     mask : numpy.ndarray, optional
-    #         Array with the same shape as the data array of a single acquisition.
-    #
-    #     Returns
-    #     -------
-    #     qtifit : dipy.reconst.qti.QtiFit
-    #         The fitted model.
-    #     """
-    #     if mask is None:
-    #         mask = np.ones(data.shape[:-1], dtype=bool)
-    #     else:
-    #         if mask.shape != data.shape[:-1]:
-    #             raise ValueError('Mask is not the same shape as data.')
-    #         mask = np.array(mask, dtype=bool, copy=False)
-    #     if self.sdpdc_constraint:
-    #         params = self.fit_method(data, mask, self.X, self.cvxpy_solver)
-    #     elif self.convexity_constraint:
-    #         params = self.fit_method(self.sdp, data, mask, self.X,
-    #                                  cvxpy_solver=self.cvxpy_solver)
-    #     else:
-    #         params = self.fit_method(data, mask, self.X)
-    #     return QtiFit(params)
 
     def predict(self, params):
         """Generate signals from this model class instance and given parameters.
