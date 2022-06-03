@@ -680,7 +680,7 @@ class QtiModel(ReconstModel):
 
         self.sdpdc_constraint = fit_method == 'SDPdc'
         if self.sdpdc_constraint:
-            self.sdp_constraints = load_sdp_constraints('qtip')
+            self.sdp_constraints = load_sdp_constraints('qti_dc')
 
         self.sdp_constraint = self.sdpdc_constraint or self.convexity_constraint
         if self.sdp_constraint:
@@ -1131,5 +1131,5 @@ class QtiFit(object):
         return k_mu
 
 
-common_fit_methods = {'OLS': _ols_fit, 'WLS': _wls_fit, 'SDPdc': _sdpdc_fit,
+common_fit_methods = {'OLS': _ols_fit, 'WLS': _wls_fit, 'SDPdc': _cwls_fit,
                       'CLS': _cls_fit, 'CWLS': _cwls_fit}
