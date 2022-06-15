@@ -189,91 +189,6 @@ def from_21x1_to_6x6(V):
     return T
 
 
-def cvxpy_1x6_to_3x3(V):
-    """Convert a 1 x 6 vector into a symmetric 3 x 3 matrix.
-
-    Parameters
-    ----------
-    V : numpy.ndarray
-        An array of size (1, 6).
-
-    Returns
-    -------
-    T : cvxpy.bmat
-        Converted matrix of size (3, 3).
-
-    Notes
-    -----
-    The conversion of a matrix into a vector is defined as
-
-        .. math::
-
-            \mathbf{V} = \begin{bmatrix}
-            T_{11} & T_{22} & T_{33} &
-            \sqrt{2} T_{23} & \sqrt{2} T_{13} & \sqrt{2} T_{12}
-            \end{bmatrix}^T
-    """
-    if V.shape[0] == 6:
-        V = V.T
-
-    f = 1 / np.sqrt(2)
-
-    T = cp.bmat([[V[0, 0], f * V[0, 5], f * V[0, 4]],
-                 [f * V[0, 5],     V[0, 1], f * V[0, 3]],
-                 [f * V[0, 4], f * V[0, 3],    V[0, 2]]])
-    return T
-
-
-def cvxpy_1x21_to_6x6(V):
-    """Convert 1 x 21 vector into a symmetric 6 x 6 matrix.
-
-    Parameters
-    ----------
-    V : numpy.ndarray
-        An array of size (1, 21).
-
-    Returns
-    -------
-    T : cvxpy.bmat
-        Converted matrices of size (6, 6).
-
-    Notes
-    -----
-    The conversion of a matrix into a vector is defined as
-
-        .. math::
-
-            \begin{matrix}
-            \mathbf{V} = & \big[
-            T_{11} & T_{22} & T_{33} \\
-            & \sqrt{2} T_{23} & \sqrt{2} T_{13} & \sqrt{2} T_{12} \\
-            & \sqrt{2} T_{14} & \sqrt{2} T_{15} & \sqrt{2} T_{16} \\
-            & \sqrt{2} T_{24} & \sqrt{2} T_{25} & \sqrt{2} T_{26} \\
-            & \sqrt{2} T_{34} & \sqrt{2} T_{35} & \sqrt{2} T_{36} \\
-            & T_{44} & T_{55} & T_{66} \\
-            & \sqrt{2} T_{45} & \sqrt{2} T_{56} & \sqrt{2} T_{46} \big]^T
-            \end{matrix}
-    """
-    if V.shape[0] == 21:
-        V = V.T
-
-    f = 1 / np.sqrt(2)
-
-    T = cp.bmat([[V[0, 0], f * V[0, 5], f * V[0, 4], f * V[0, 6],
-                f * V[0, 7], f * V[0, 8]],
-                [f * V[0, 5], V[0, 1],
-                 f * V[0, 3], f * V[0, 9], f * V[0, 10], f * V[0, 11]],
-                [f * V[0, 4], f * V[0, 3], V[0, 2], f * V[0, 12],
-                 f * V[0, 13], f * V[0, 14]],
-                [f * V[0, 6], f * V[0, 9],
-                 f * V[0, 12], V[0, 15], f * V[0, 18], f * V[0, 20]],
-                [f * V[0, 7], f * V[0, 10], f * V[0, 13], f * V[0, 18],
-                 V[0, 16], f * V[0, 19]],
-                [f * V[0, 8], f * V[0, 11],
-                 f * V[0, 14], f * V[0, 20], f * V[0, 19], V[0, 17]]])
-    return T
-
-
 # These tensors are used in the calculation of the QTI parameters
 e_iso = np.eye(3) / 3
 E_iso = np.eye(6) / 3
@@ -482,75 +397,6 @@ def _wls_fit(data, X, Xinv):
     return params
 
 
-def _sdpdc_fit(data, X, cvxpy_solver=None):
-    """Estimate the model parameters using Semidefinite Programming (SDP),
-    while enforcing positivity constraints on the D and C tensors (SDPdc) [2]_
-
-    Parameters
-    ----------
-    data : numpy.ndarray
-        Signal array of shape (number of acquisitions).
-    X : numpy.ndarray
-        Design matrix of shape (number of acquisitions, 28).
-    cvxpy_solver: string, optional
-        The name of the SDP solver to be used. Default: None
-
-    Returns
-    -------
-    params : numpy.ndarray
-        Array of shape (..., 28) containing the estimated model parameters.
-        Element 0 is the natural logarithm of the estimated signal without
-        diffusion-weighting, elements 1-6 are the estimated diffusion tensor
-        elements in Voigt notation, and elements 7-27 are the estimated
-        covariance tensor elements in Voigt notation.
-
-    References
-    ----------
-    .. [2] Herberthson M., Boito D., Dela Haije T., Feragen A., Westin C.-F.,
-           Ozarslan E., "Q-space trajectory imaging with positivity constraints
-           (QTI+)" in Neuroimage, Volume 238, 2021.
-    """
-    scale = np.max(data)
-    scale = scale if scale > 1. else 1.
-    data_scaled = data / scale
-    log_data = np.asarray([np.log(data_scaled)]).T
-
-    W = np.diag(data_scaled)
-    y = W @ log_data
-    A = W @ X
-
-    x = cp.Variable((28, 1))
-    dc = cvxpy_1x6_to_3x3(x[1:7])
-    cc = cvxpy_1x21_to_6x6(x[7:])
-    constraints = [dc >> 0, cc >> 0]
-    if Version(cp.__version__) < Version('1.1'):
-        objective = cp.Minimize(cp.norm(A * x - y))
-    else:
-        objective = cp.Minimize(cp.norm(A @ x - y))
-    prob = cp.Problem(objective, constraints)
-    unconstrained = cp.Problem(objective)
-
-    try:
-        prob.solve(solver=cvxpy_solver, verbose=False)
-        params = np.squeeze(x.value)
-    except Exception:
-        msg = 'Constrained optimization failed, attempting unconstrained'
-        msg += ' optimization.'
-        warn(msg)
-        try:
-            unconstrained.solve(solver=cvxpy_solver)
-            params = np.squeeze(x.value)
-        except Exception:
-            msg = 'Unconstrained optimization failed,'
-            msg += ' returning zero array.'
-            warn(msg)
-            return np.zeros(x.shape)
-
-    params[0] += np.log(scale)
-
-    return params
-
-
 def _cls_fit(sdp, data, X, cvxpy_solver=None):
     """Estimate the model parameters using ordinary least squares with convexity
     constraints.
@@ -615,7 +461,8 @@ def _cwls_fit(sdp, data, X, cvxpy_solver=None):
 
 class QtiModel(ReconstModel):
 
-    def __init__(self, gtab, fit_method='WLS', cvxpy_solver=None):
+    def __init__(self, gtab, fit_method='WLS', convexity_level='full',
+                 cvxpy_solver=None):
         """Covariance tensor model of q-space trajectory imaging [1]_.
 
         Parameters
@@ -635,6 +482,9 @@ class QtiModel(ReconstModel):
                     :func:`qti._cls_fit`
                 'CWLS' for weighted least squares with convexity constraints
                     :func:`qti._cwls_fit`
+        convexity_level : 0, 2, or 'full'
+            Parameter indicating the hierarchy order of the convexity
+            constraints.
         cvxpy_solver: str, optional
             solver for the SDP formulation. default: None
 
@@ -676,7 +526,24 @@ class QtiModel(ReconstModel):
 
         self.convexity_constraint = fit_method in {'CLS', 'CWLS'}
         if self.convexity_constraint:
-            self.sdp_constraints = load_sdp_constraints('qti')
+            self.convexity_level = convexity_level
+            msg = "convexity_level must be a positive, even number, or 'full'."
+            if isinstance(self.convexity_level, str):
+                if self.convexity_level == 'full':
+                    #Enforce convexity constraints globally
+                    self.sdp_constraints = load_sdp_constraints('qti')
+                else:
+                    raise ValueError(msg)
+            elif self.convexity_level < 0 or self.convexity_level % 2:
+                raise ValueError(msg)
+            else:
+                if self.convexity_level > 2:
+                    msg = "Maximum convexity_level supported is 2."
+                    warnings.warn(msg)
+                    self.convexity_level = 2
+                #Approximate convexity constraints inside a ball with b < 1
+                self.sdp_constraints = load_sdp_constraints(
+                    'qti', self.convexity_level)
 
         self.sdpdc_constraint = fit_method == 'SDPdc'
         if self.sdpdc_constraint:
@@ -697,9 +564,6 @@ class QtiModel(ReconstModel):
 
     @multi_voxel_fit
     def fit(self, data):
-        # if self.sdpdc_constraint:
-        #     params = self.fit_method(data, self.X,
-        #                              cvxpy_solver=self.cvxpy_solver)
         if self.sdp_constraint:
             params = self.fit_method(self.sdp, data, self.X,
                                      cvxpy_solver=self.cvxpy_solver)
